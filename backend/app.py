@@ -34,12 +34,10 @@ def create_app(config_class=Config):
                 port=app.config['REDIS_PORT'],
                 db=app.config['REDIS_DB'],
                 socket_connect_timeout=2,
-                socket_timeout=2,
-                decode_responses=True
+                socket_timeout=2
             )
             # Test the connection
             app.redis.ping()
-            print("Redis connection successful")
         except (redis.ConnectionError, redis.TimeoutError) as e:
             print(f"Redis connection failed: {e}. Continuing without Redis caching.")
             app.redis = None

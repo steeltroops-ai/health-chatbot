@@ -9,12 +9,7 @@ chat_bp = Blueprint('chat', __name__)
 
 # Set up the OpenAI client
 def get_openai_client():
-    api_key = current_app.config['OPENAI_API_KEY']
-    # Check if API key is valid
-    if not api_key or not isinstance(api_key, str) or len(api_key) < 10:
-        current_app.logger.error("Invalid OpenAI API key configuration")
-        return None
-    return openai.OpenAI(api_key=api_key)
+    return openai.OpenAI(api_key=current_app.config['OPENAI_API_KEY'])
 
 # Medical chatbot system prompt
 SYSTEM_PROMPT = """
@@ -64,26 +59,15 @@ def send_message(current_user):
     # Try to get from cache first
     cache_key = f"chat:{hashlib.md5(user_message.encode()).hexdigest()}"
     cached_response = None
-    assistant_response = None
     
-    # Only try to use Redis if it's available
-    redis_available = hasattr(current_app, 'redis') and current_app.redis is not None
-    
-    if redis_available:
-        try:
+    try:
+        if hasattr(current_app, 'redis'):
             cached_response = current_app.redis.get(cache_key)
-            
-            if cached_response:
-                # Use cached response if available
-                assistant_response = json.loads(cached_response)
-                current_app.logger.info(f"Using cached response for: {cache_key}")
-        except Exception as cache_error:
-            current_app.logger.warning(f"Cache retrieval error: {cache_error}")
-            # Continue with API call if cache fails
-            cached_response = None
-    
-    # If no cached response, call the API
-    if not cached_response:
+        
+        if cached_response:
+            # Use cached response if available
+            assistant_response = json.loads(cached_response)
+    else:
         # Get previous messages in this session for context
         previous_messages = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.created_at).all()
         
@@ -104,10 +88,6 @@ def send_message(current_user):
 
             # Call OpenAI API
             client = get_openai_client()
-            if not client:
-                return jsonify({'message': 'Failed to initialize OpenAI client!', 'error': 'Invalid API key configuration'}), 500
-            
-            # Make API request with proper error handling
             try:
                 response = client.chat.completions.create(
                     model=current_app.config['OPENAI_MODEL'],
@@ -120,45 +100,29 @@ def send_message(current_user):
                 )
                 
                 # Extract the response content
-                if not response or not response.choices or len(response.choices) == 0:
-                    return jsonify({'message': 'Empty response from OpenAI API!', 'error': 'No content returned'}), 500
-                
                 assistant_response = response.choices[0].message.content
                 
-                # Cache the response only if Redis is available
-                redis_available = hasattr(current_app, 'redis') and current_app.redis is not None
-                if redis_available:
-                    try:
+                # Cache the response
+                try:
+                    if hasattr(current_app, 'redis'):
                         current_app.redis.setex(
                             cache_key,
                             3600,  # Cache for 1 hour
                             json.dumps(assistant_response)
                         )
-                        current_app.logger.info(f"Response cached successfully: {cache_key}")
-                    except Exception as redis_error:
-                        # Log Redis error but continue processing
-                        current_app.logger.warning(f"Redis caching error: {redis_error}")
-                        # Don't let Redis errors affect the API response
-                
+                except Exception as redis_error:
+                    # Log Redis error but continue processing
+                    print(f"Redis caching error: {redis_error}")
+                    
             except openai.AuthenticationError as auth_error:
-                current_app.logger.error(f"OpenAI Authentication Error: {auth_error}")
                 return jsonify({'message': 'Invalid OpenAI API key!', 'error': str(auth_error)}), 401
             except openai.RateLimitError as rate_error:
-                current_app.logger.error(f"OpenAI Rate Limit Error: {rate_error}")
                 return jsonify({'message': 'OpenAI API rate limit exceeded!', 'error': str(rate_error)}), 429
-            except openai.APIConnectionError as conn_error:
-                current_app.logger.error(f"OpenAI API Connection Error: {conn_error}")
-                return jsonify({'message': 'Failed to connect to OpenAI API!', 'error': str(conn_error)}), 503
             except openai.APIError as api_error:
-                current_app.logger.error(f"OpenAI API Error: {api_error}")
                 return jsonify({'message': 'OpenAI API error!', 'error': str(api_error)}), 500
-            except Exception as e:
-                current_app.logger.error(f"Unexpected error during OpenAI API call: {e}")
-                return jsonify({'message': 'Unexpected error during OpenAI API call!', 'error': str(e)}), 500
                 
         except Exception as e:
-            current_app.logger.error(f"Error in chat processing: {e}")
-            return jsonify({'message': 'Error processing chat request!', 'error': str(e)}), 500
+            return jsonify({'message': 'Error getting response from OpenAI!', 'error': str(e)}), 500
     
     # Save the user message
     user_msg = ChatMessage(
