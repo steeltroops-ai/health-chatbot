@@ -208,23 +208,62 @@ def send_message(current_user):
                     fallback_response = generate_fallback_response(user_message)
                     current_app.logger.info(f"Using fallback response mechanism due to rate limiting")
                     
-                    # Return both the fallback response and the error information
-                    if 'insufficient_quota' in error_message:
-                        return jsonify({
-                            'message': 'Your OpenAI API key has exceeded its quota. Please check your billing details or use a different API key.',
-                            'error': error_message,
-                            'error_type': 'quota_exceeded',
-                            'response': fallback_response,
-                            'is_fallback': True
-                        }), 200  # Return 200 with fallback instead of 429 to allow the chat to continue
+                    # Set assistant_response to the fallback response so it gets saved to the database
+                    assistant_response = fallback_response
+                    
+                    # Add a note to the response that this is a fallback
+                    assistant_response += "\n\n*Note: This is a fallback response due to AI service limitations.*"
+                    
+                    # Determine error type for the frontend
+                    error_type = "quota_exceeded" if "insufficient_quota" in error_message else "rate_limited"
+                    
+                    # Log appropriate message
+                    if error_type == "quota_exceeded":
+                        current_app.logger.warning("OpenAI API quota exceeded, using fallback response")
                     else:
-                        return jsonify({
-                            'message': 'OpenAI API rate limit exceeded. Please try again in a few moments.',
-                            'error': error_message,
-                            'error_type': 'rate_limited',
-                            'response': fallback_response,
-                            'is_fallback': True
-                        }), 200  # Return 200 with fallback instead of 429 to allow the chat to continue
+                        current_app.logger.warning("OpenAI API rate limited, using fallback response")
+                    
+                    # Save the user message
+                    user_msg = ChatMessage(
+                        session_id=session_id,
+                        role="user",
+                        content=user_message
+                    )
+                    db.session.add(user_msg)
+                    
+                    # Save the assistant response
+                    assistant_msg = ChatMessage(
+                        session_id=session_id,
+                        role="assistant",
+                        content=assistant_response
+                    )
+                    db.session.add(assistant_msg)
+                    
+                    # Update the session title if it's the first message
+                    if len(previous_messages) < 2:  # Just the first user message
+                        # Use the first ~30 chars of user message as title
+                        title = user_message[:30] + '...' if len(user_message) > 30 else user_message
+                        session.title = title
+                    
+                    db.session.commit()
+                    
+                    # Also save to the general chat history
+                    chat_history = ChatHistory(
+                        user_id=current_user.id,
+                        query=user_message,
+                        response=assistant_response
+                    )
+                    db.session.add(chat_history)
+                    db.session.commit()
+                    
+                    # Return the response with a flag indicating it's a fallback
+                    return jsonify({
+                        'message': 'Message sent successfully with fallback response!',
+                        'response': assistant_response,
+                        'session_id': session_id,
+                        'is_fallback': True,
+                        'error_type': error_type
+                    }), 200
                 except openai.APIError as api_error:
                     return jsonify({'message': 'OpenAI API error!', 'error': str(api_error)}), 500
                 except Exception as e:

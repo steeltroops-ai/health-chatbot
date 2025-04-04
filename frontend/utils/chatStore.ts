@@ -194,8 +194,9 @@ const useChatStore = create<ChatState>((set, get) => ({
       // Send the message to the backend
       const response = await api.post(`/chat/send`, payload);
 
-      // Check if this is a fallback response due to rate limiting
+      // Check if this is a fallback response due to rate limiting or quota exceeded
       const isFallback = response.data?.is_fallback === true;
+      const errorType = response.data?.error_type;
 
       if (!response.data || !response.data.response) {
         throw new Error("Invalid response from server");
@@ -204,11 +205,7 @@ const useChatStore = create<ChatState>((set, get) => ({
       // Replace typing indicator with actual response or add response if no indicator
       let content = response.data.response;
 
-      // Add a note if this is a fallback response
-      if (isFallback) {
-        content +=
-          "\n\n*Note: This is a fallback response due to AI service limitations.*";
-      }
+      // Note: The backend already adds the fallback note to the response content
 
       const assistantMessage: ChatMessage = {
         role: "assistant",

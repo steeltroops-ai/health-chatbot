@@ -55,7 +55,7 @@ const ChatInterface: React.FC = () => {
 
     try {
       // Send the message
-      await sendMessage(activeChatId, message, tempMessage);
+      const response = await sendMessage(activeChatId, message, tempMessage);
     } catch (error: any) {
       console.error("Error sending message:", error);
 
@@ -66,10 +66,23 @@ const ChatInterface: React.FC = () => {
           (error.response?.data?.error_type === "rate_limited" ||
             error.response?.data?.error_type === "quota_exceeded"))
       ) {
-        // Get the error message
+        // Get the error message and error type
         const errorMessage =
           error.response?.data?.message ||
           "Rate limit exceeded. Please try again later.";
+
+        // Get the error type
+        const errorType = error.response?.data?.error_type || "rate_limited";
+
+        // Create a more user-friendly message based on error type
+        let userFriendlyMessage = errorMessage;
+        if (errorType === "quota_exceeded") {
+          userFriendlyMessage =
+            "The AI service quota has been exceeded. Using fallback responses for now.";
+        } else if (errorType === "rate_limited") {
+          userFriendlyMessage =
+            "The AI service is currently rate limited. Using fallback responses for now.";
+        }
 
         // If there's a fallback response available, use it
         if (
@@ -98,10 +111,10 @@ const ChatInterface: React.FC = () => {
             return { activeMessages: messages };
           });
 
-          // Show a notification about the rate limit
+          // Show a notification about the rate limit or quota exceeded
           const systemMsg = {
             role: "system",
-            content: `System: ${errorMessage}`,
+            content: `System: ${userFriendlyMessage}`,
           };
 
           useChatStore.setState((state) => {
@@ -114,7 +127,7 @@ const ChatInterface: React.FC = () => {
         // If no fallback, show error message
         const errorMsg = {
           role: "system",
-          content: `Error: ${errorMessage} (Rate limit exceeded)`,
+          content: `Error: ${userFriendlyMessage}`,
         };
 
         useChatStore.setState((state) => {
