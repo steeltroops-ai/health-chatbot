@@ -7,11 +7,13 @@ interface MessageBubbleProps {
     content: string;
   };
   isLast?: boolean;
+  isLastMessage?: boolean;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
   isLast = false,
+  isLastMessage = false,
 }) => {
   const isUser = message.role === "user";
   const isTyping = message.content === "[TYPING]";
