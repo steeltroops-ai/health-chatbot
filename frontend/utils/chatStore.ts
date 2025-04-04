@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import axios from "axios";
 import { getSession } from "next-auth/react";
+import api from "./api";
 
 // Types
 interface ChatSession {
@@ -39,16 +39,19 @@ interface ChatState {
   clearError: () => void;
 }
 
-// API utilities
-const getApiUrl = () =>
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+// Helper to handle errors consistently
+const handleApiError = (error: any): string => {
+  console.error("API Error:", error);
 
-const getAuthHeaders = async () => {
-  const session = await getSession();
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
 
-  return {
-    Authorization: `Bearer ${session?.user?.accessToken}`,
-  };
+  if (error.message) {
+    return error.message;
+  }
+
+  return "An unknown error occurred";
 };
 
 // Create store
@@ -65,10 +68,7 @@ const useChatStore = create<ChatState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
 
-      const headers = await getAuthHeaders();
-      const response = await axios.get(`${getApiUrl()}/chat/sessions`, {
-        headers,
-      });
+      const response = await api.get(`/chat/sessions`);
 
       set({
         sessions: response.data.sessions,
@@ -81,9 +81,8 @@ const useChatStore = create<ChatState>((set, get) => ({
         set({ activeChatId: sessions[0].id });
       }
     } catch (error: any) {
-      console.error("Error fetching sessions:", error);
       set({
-        error: error.response?.data?.message || "Failed to load chat sessions",
+        error: handleApiError(error),
         isLoading: false,
       });
     }
@@ -94,11 +93,7 @@ const useChatStore = create<ChatState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
 
-      const headers = await getAuthHeaders();
-      const response = await axios.get(
-        `${getApiUrl()}/chat/sessions/${sessionId}`,
-        { headers }
-      );
+      const response = await api.get(`/chat/sessions/${sessionId}`);
 
       // Transform messages to the format we need
       const messages = response.data.messages.map((msg: any) => ({
@@ -114,9 +109,8 @@ const useChatStore = create<ChatState>((set, get) => ({
         isLoading: false,
       });
     } catch (error: any) {
-      console.error("Error fetching messages:", error);
       set({
-        error: error.response?.data?.message || "Failed to load messages",
+        error: handleApiError(error),
         isLoading: false,
       });
     }
@@ -127,20 +121,24 @@ const useChatStore = create<ChatState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
 
-      const headers = await getAuthHeaders();
+      // Use a default message if none provided
+      const message = initialMessage || "Hello, I need some medical advice.";
+
+      console.log("Creating new chat with message:", message);
 
       // Create a new session (the backend will create one if no session_id is provided)
-      const response = await axios.post(
-        `${getApiUrl()}/chat/send`,
-        {
-          message: initialMessage || "Hello, I need some medical advice.",
-        },
-        { headers }
-      );
+      const response = await api.post(`/chat/send`, { message });
 
-      // Refresh sessions and set active chat
+      console.log("Server response:", response.data);
+
+      if (!response.data || !response.data.session_id) {
+        throw new Error("Invalid response from server");
+      }
+
+      // Update our sessions list
       await get().fetchSessions();
 
+      // Set the active chat to the new session
       set({
         activeChatId: response.data.session_id,
         isLoading: false,
@@ -150,8 +148,14 @@ const useChatStore = create<ChatState>((set, get) => ({
       await get().fetchMessages(response.data.session_id);
     } catch (error: any) {
       console.error("Error creating new chat:", error);
+      console.error("Error details:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+
       set({
-        error: error.response?.data?.message || "Failed to create new chat",
+        error: handleApiError(error),
         isLoading: false,
       });
     }
@@ -164,7 +168,7 @@ const useChatStore = create<ChatState>((set, get) => ({
     tempMessage?: ChatMessage
   ) => {
     try {
-      // Don't set loading state here to avoid UI disruption
+      // Don't set isLoading to true here to avoid UI disruption
       set({ error: null });
 
       // Add user message to the UI immediately
@@ -184,21 +188,31 @@ const useChatStore = create<ChatState>((set, get) => ({
         }));
       }
 
+      // Create the payload object
+      const payload = { message, session_id: sessionId };
+
       // Send the message to the backend
-      const headers = await getAuthHeaders();
-      const response = await axios.post(
-        `${getApiUrl()}/chat/send`,
-        {
-          message,
-          session_id: sessionId,
-        },
-        { headers }
-      );
+      const response = await api.post(`/chat/send`, payload);
+
+      // Check if this is a fallback response due to rate limiting
+      const isFallback = response.data?.is_fallback === true;
+
+      if (!response.data || !response.data.response) {
+        throw new Error("Invalid response from server");
+      }
 
       // Replace typing indicator with actual response or add response if no indicator
+      let content = response.data.response;
+
+      // Add a note if this is a fallback response
+      if (isFallback) {
+        content +=
+          "\n\n*Note: This is a fallback response due to AI service limitations.*";
+      }
+
       const assistantMessage: ChatMessage = {
         role: "assistant",
-        content: response.data.response,
+        content: content,
       };
 
       set((state) => {
@@ -215,22 +229,25 @@ const useChatStore = create<ChatState>((set, get) => ({
         }
       });
 
+      // If there was a rate limit issue but we got a fallback response,
+      // show a system message explaining the situation
+      if (isFallback && response.data?.message) {
+        const systemMessage: ChatMessage = {
+          role: "system",
+          content: `System: ${response.data.message}`,
+        };
+
+        set((state) => ({
+          activeMessages: [...state.activeMessages, systemMessage],
+        }));
+      }
+
       // Refresh sessions to update the chat title
       await get().fetchSessions();
     } catch (error: any) {
-      console.error("Error sending message:", error);
-
-      // Remove typing indicator if there was an error
-      if (tempMessage) {
-        set((state) => ({
-          activeMessages: state.activeMessages.slice(0, -1),
-          error: error.response?.data?.message || "Failed to send message",
-        }));
-      } else {
-        set({
-          error: error.response?.data?.message || "Failed to send message",
-        });
-      }
+      // Let the ChatInterface component handle the error display
+      // since it has more context about the UI state
+      throw error;
     }
   },
 
@@ -239,10 +256,7 @@ const useChatStore = create<ChatState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
 
-      const headers = await getAuthHeaders();
-      await axios.delete(`${getApiUrl()}/chat/sessions/${sessionId}`, {
-        headers,
-      });
+      await api.delete(`/chat/sessions/${sessionId}`);
 
       // Refresh sessions
       await get().fetchSessions();
@@ -257,9 +271,8 @@ const useChatStore = create<ChatState>((set, get) => ({
 
       set({ isLoading: false });
     } catch (error: any) {
-      console.error("Error deleting chat:", error);
       set({
-        error: error.response?.data?.message || "Failed to delete chat",
+        error: handleApiError(error),
         isLoading: false,
       });
     }

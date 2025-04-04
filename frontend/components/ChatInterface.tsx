@@ -1,84 +1,184 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { motion } from 'framer-motion'
-import MessageBubble from './MessageBubble'
-import useChatStore from '../utils/chatStore'
+import React, { useState, useEffect, useRef } from "react";
+import { motion } from "framer-motion";
+import MessageBubble from "./MessageBubble";
+import useChatStore from "../utils/chatStore";
 
 const ChatInterface: React.FC = () => {
-  const [input, setInput] = useState('')
-  const [isTyping, setIsTyping] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-  
-  const { 
-    activeChatId, 
-    activeMessages, 
-    sendMessage, 
-    fetchMessages, 
-    isLoading 
-  } = useChatStore()
+  const [input, setInput] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const {
+    activeChatId,
+    activeMessages,
+    sendMessage,
+    fetchMessages,
+    isLoading,
+  } = useChatStore();
 
   // Scroll to bottom of messages
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   // Fetch messages when active chat changes
   useEffect(() => {
     if (activeChatId) {
-      fetchMessages(activeChatId)
+      fetchMessages(activeChatId);
     }
-  }, [activeChatId, fetchMessages])
+  }, [activeChatId, fetchMessages]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
-    scrollToBottom()
-  }, [activeMessages])
+    scrollToBottom();
+  }, [activeMessages]);
 
   // Auto-focus the input field
   useEffect(() => {
-    inputRef.current?.focus()
-  }, [activeChatId])
+    inputRef.current?.focus();
+  }, [activeChatId]);
 
   // Handle sending a message
   const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    if (!input.trim() || !activeChatId || isTyping) return
-    
+    e.preventDefault();
+
+    if (!input.trim() || !activeChatId || isTyping) return;
+
     // Clear input and set typing state
-    const message = input
-    setInput('')
-    setIsTyping(true)
-    
+    const message = input;
+    setInput("");
+    setIsTyping(true);
+
     // Add a temporary typing indicator message
-    const tempMessage = { role: 'assistant', content: '[TYPING]' }
-    
+    const tempMessage = { role: "assistant", content: "[TYPING]" };
+
     try {
       // Send the message
-      await sendMessage(activeChatId, message, tempMessage)
-    } catch (error) {
-      console.error('Error sending message:', error)
+      await sendMessage(activeChatId, message, tempMessage);
+    } catch (error: any) {
+      console.error("Error sending message:", error);
+
+      // Check if this is a rate limit error with fallback response
+      if (
+        error.response?.status === 429 ||
+        (error.response?.data?.error_type &&
+          (error.response?.data?.error_type === "rate_limited" ||
+            error.response?.data?.error_type === "quota_exceeded"))
+      ) {
+        // Get the error message
+        const errorMessage =
+          error.response?.data?.message ||
+          "Rate limit exceeded. Please try again later.";
+
+        // If there's a fallback response available, use it
+        if (
+          error.response?.data?.response &&
+          error.response?.data?.is_fallback
+        ) {
+          // Replace typing indicator with fallback response
+          const fallbackMsg = {
+            role: "assistant",
+            content:
+              error.response.data.response +
+              "\n\n*Note: This is a fallback response due to AI service limitations.*",
+          };
+
+          useChatStore.setState((state) => {
+            const messages = [...state.activeMessages];
+            // Replace typing indicator if it exists
+            if (
+              messages.length > 0 &&
+              messages[messages.length - 1].content === "[TYPING]"
+            ) {
+              messages[messages.length - 1] = fallbackMsg;
+            } else {
+              messages.push(fallbackMsg);
+            }
+            return { activeMessages: messages };
+          });
+
+          // Show a notification about the rate limit
+          const systemMsg = {
+            role: "system",
+            content: `System: ${errorMessage}`,
+          };
+
+          useChatStore.setState((state) => {
+            return { activeMessages: [...state.activeMessages, systemMsg] };
+          });
+
+          return; // Exit early since we've handled the response
+        }
+
+        // If no fallback, show error message
+        const errorMsg = {
+          role: "system",
+          content: `Error: ${errorMessage} (Rate limit exceeded)`,
+        };
+
+        useChatStore.setState((state) => {
+          const messages = [...state.activeMessages];
+          // Replace typing indicator if it exists
+          if (
+            messages.length > 0 &&
+            messages[messages.length - 1].content === "[TYPING]"
+          ) {
+            messages[messages.length - 1] = errorMsg;
+          } else {
+            messages.push(errorMsg);
+          }
+          return { activeMessages: messages };
+        });
+      } else {
+        // Display error message in chat for other errors
+        const errorMessage =
+          error.response?.data?.message ||
+          "Failed to get a response from the server.";
+
+        const errorMsg = {
+          role: "system",
+          content: `Error: ${errorMessage}`,
+        };
+
+        useChatStore.setState((state) => {
+          const messages = [...state.activeMessages];
+          // Replace typing indicator if it exists
+          if (
+            messages.length > 0 &&
+            messages[messages.length - 1].content === "[TYPING]"
+          ) {
+            messages[messages.length - 1] = errorMsg;
+          } else {
+            messages.push(errorMsg);
+          }
+          return { activeMessages: messages };
+        });
+      }
+
+      // We've handled the error message display above, so we can return early
+      return;
     } finally {
-      setIsTyping(false)
+      setIsTyping(false);
     }
-  }
+  };
 
   // Handle textarea input
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSendMessage(e)
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage(e);
     }
-  }
+  };
 
   // Auto-resize textarea
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value)
-    
+    setInput(e.target.value);
+
     // Auto-resize
-    e.target.style.height = 'auto'
-    e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px'
-  }
+    e.target.style.height = "auto";
+    e.target.style.height = Math.min(e.target.scrollHeight, 150) + "px";
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -87,8 +187,18 @@ const ChatInterface: React.FC = () => {
         <div className="flex items-center">
           <div className="flex-shrink-0">
             <div className="h-8 w-8 rounded-full bg-primary-500 flex items-center justify-center text-white">
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <svg
+                className="h-5 w-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
               </svg>
             </div>
           </div>
@@ -116,10 +226,22 @@ const ChatInterface: React.FC = () => {
           </div>
         ) : activeMessages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-6">
-            <svg className="h-12 w-12 text-gray-400 dark:text-gray-600 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            <svg
+              className="h-12 w-12 text-gray-400 dark:text-gray-600 mb-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
+              />
             </svg>
-            <p className="text-gray-500 dark:text-gray-400">No messages yet. Start a conversation!</p>
+            <p className="text-gray-500 dark:text-gray-400">
+              No messages yet. Start a conversation!
+            </p>
           </div>
         ) : (
           <>
@@ -129,20 +251,21 @@ const ChatInterface: React.FC = () => {
                 Welcome to Medical Chatbot!
               </p>
               <p>
-                I can provide health information and guidance. Remember, I'm not a substitute for professional medical advice.
-                Always consult a healthcare provider for serious concerns.
+                I can provide health information and guidance. Remember, I'm not
+                a substitute for professional medical advice. Always consult a
+                healthcare provider for serious concerns.
               </p>
             </div>
-            
+
             {/* Message bubbles */}
             {activeMessages.map((message, index) => (
-              <MessageBubble 
-                key={index} 
-                message={message} 
+              <MessageBubble
+                key={index}
+                message={message}
                 isLastMessage={index === activeMessages.length - 1}
               />
             ))}
-            
+
             {/* Invisible element to scroll to */}
             <div ref={messagesEndRef} />
           </>
@@ -175,13 +298,40 @@ const ChatInterface: React.FC = () => {
             className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed h-10"
           >
             {isTyping ? (
-              <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              <svg
+                className="animate-spin h-5 w-5"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                ></circle>
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                ></path>
               </svg>
             ) : (
-              <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+              <svg
+                className="h-5 w-5"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                />
               </svg>
             )}
           </motion.button>
@@ -190,12 +340,13 @@ const ChatInterface: React.FC = () => {
         {/* Disclaimer */}
         <div className="mt-2 text-center">
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            Not a substitute for professional medical advice. Always consult a healthcare provider.
+            Not a substitute for professional medical advice. Always consult a
+            healthcare provider.
           </p>
         </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default ChatInterface
+export default ChatInterface;
